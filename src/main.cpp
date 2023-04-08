@@ -1,8 +1,7 @@
 /*
   Wind - NMEA Wind Instrument
   Copyright (c) 2018 Tom K
-  Originally written for Arduino Pro Mini 328
-  v3c
+  SensESP adaptation (c) 2023 Tobias R
 
   MIT License
 
@@ -25,17 +24,12 @@
   SOFTWARE.
 */
 
-#define VERSION "Wind v3 18-Sep-2015"
+#include "Version.h"
+#include "Arduino.h"
+#include "PString.h" // only used in printWindNmea() and can be ditched once the SensESP part works.
 
-#include "PString.h"
-
-#define windSpeedPin 2
-#define windDirPin 3
-#define windSpeedINT 0 // INT0
-#define windDirINT 1   // INT1
-
-// Pin 13 has an LED connected on most Arduino boards.
-int LED = 13;
+#define windSpeedPin 12
+#define windDirPin 14
 
 const unsigned long DEBOUNCE = 10000ul;      // Minimum switch time in microseconds
 const unsigned long DIRECTION_OFFSET = 0ul;  // Manual direction offset in degrees, if required
@@ -70,33 +64,39 @@ volatile boolean ignoreNextReading = false;
 
 boolean debug = false;
 
+// initial function declarations
+void IRAM_ATTR readWindSpeed();
+void IRAM_ATTR readWindDir();
+boolean checkDirDev(long knots, int dev);
+boolean checkSpeedDev(long knots, int dev);
+void calcWindSpeedAndDir();
+byte getChecksum(char* str);  // only needed for NMEA, can be ditched later
+void printWindNmea();         // only needed for NMEA, can be ditched later
+
+
 void setup()
 {
-    pinMode(LED, OUTPUT);
-
-    Serial.begin(38400, SERIAL_8N1);
-    Serial.println(VERSION);
+    Serial.begin(115200, SERIAL_8N1);
+    Serial.printf("(non)SensESP-PeetBrosWind version v%s, built %s\n",VERSION,BUILD_TIMESTAMP);
     Serial.print("Direction Filter: ");
     Serial.println(filterGain);
 
-    pinMode(windSpeedPin, INPUT);
-    attachInterrupt(windSpeedINT, readWindSpeed, FALLING);
+    pinMode(windSpeedPin, INPUT_PULLUP);
+    attachInterrupt(windSpeedPin, readWindSpeed, FALLING);
 
-    pinMode(windDirPin, INPUT);
-    attachInterrupt(windDirINT, readWindDir, FALLING);
+    pinMode(windDirPin, INPUT_PULLUP);
+    attachInterrupt(windDirPin, readWindDir, FALLING);
 
     interrupts();
 }
 
-
-void readWindSpeed()
+void IRAM_ATTR readWindSpeed()
 {
     // Despite the interrupt being set to FALLING edge, double check the pin is now LOW
     if (((micros() - speedPulse) > DEBOUNCE) && (digitalRead(windSpeedPin) == LOW))
     {
         // Work out time difference between last pulse and now
         speedTime = micros() - speedPulse;
-
         // Direction pulse should have occured after the last speed pulse
         if (dirPulse - speedPulse >= 0) directionTime = dirPulse - speedPulse;
 
@@ -105,7 +105,7 @@ void readWindSpeed()
     }
 }
 
-void readWindDir()
+void IRAM_ATTR readWindDir()
 {
     if (((micros() - dirPulse) > DEBOUNCE) && (digitalRead(windDirPin) == LOW))
     {
@@ -207,6 +207,7 @@ void calcWindSpeedAndDir()
           {
             // Calculate direction from captured pulse times
             windDirection = (((directionTime_ * 360) / speedTime_) + DIRECTION_OFFSET) % 360;
+            windDirection = 360 - windDirection;
 
             // Find deviation from previous value
             dev = (int)windDirection - prevDir;
@@ -225,6 +226,7 @@ void calcWindSpeedAndDir()
               }
               // Perform filtering to smooth the direction output
               dirOut = (dirOut + (int)(round(filterGain * delta))) % 360;
+              // resulting direction was reversed, rotating the wind vane clockwise gave counterclockwise readings
               if (dirOut < 0) dirOut = dirOut + 360;
             }
             prevDir = windDirection;
@@ -317,14 +319,11 @@ void printWindNmea()
     Serial.println(windSentence);
 }
 
-
 void loop()
 {
   int i;
   const unsigned int LOOP_DELAY = 50;
   const unsigned int LOOP_TIME = TIMEOUT / LOOP_DELAY;
-
-  digitalWrite(LED, !digitalRead(LED));    // Toggle LED
 
   i = 0;
   // If there is new data, process it, otherwise wait for LOOP_TIME to pass

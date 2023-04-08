@@ -1,4 +1,4 @@
 # peet-bros-wind
-An Arduino project for the Peet Bros PRO Wind Vane to produce NMEA 0183 output.
+A SensESP project to read wind speed and direction from a Peet Bros Anemometer PRO and transmit the data to a SignalK server.
 
-Full documentation here: https://mechinations.net/wind-v3/
+Heavily based on  https://github.com/guywithaview/peet-bros-wind
