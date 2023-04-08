@@ -62,7 +62,7 @@ volatile int knotsOut = 0;    // Wind speed output in knots * 100
 volatile int dirOut = 0;      // Direction output in degrees
 volatile boolean ignoreNextReading = false;
 
-boolean debug = false;
+boolean debug = true;
 
 // initial function declarations
 void IRAM_ATTR readWindSpeed();
