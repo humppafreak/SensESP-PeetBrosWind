@@ -70,14 +70,18 @@ volatile unsigned long lastUpdate = 0ul;    // Time of last serial output
 volatile int speedOut = 0;    // Wind speed output in cm/s (divide by 100 for m/s)
 volatile int dirOut = 0;      // Direction output in degrees
 volatile boolean ignoreNextReading = false;
+volatile long rps = 0l;
+
+SKOutputFloat* speed_output;
+SKOutputFloat* dir_output;
 
 boolean debug = false;
 
 // initial function declarations
 void IRAM_ATTR readWindSpeed();
 void IRAM_ATTR readWindDir();
-boolean checkDirDev(long cmps, int dev);
 boolean checkSpeedDev(long cmps, int dev);
+boolean checkDirDev(long cmps, int dev);
 void calcWindSpeedAndDir();
 void printDebug();
 
@@ -104,14 +108,12 @@ void setup()
                   ->enable_system_info_sensors()
                   ->get_app();
 
-    const char* dir_path = "environment.wind.angleApparent";
     const char* speed_path = "environment.wind.speedApparent";
+    const char* dir_path = "environment.wind.angleApparent";
 
-/* 
-  TODO
-    auto* dir_output = new SKOutputFloat(dir_path);
-    auto* speed_output = new SKOutputFloat(speed_path);
-*/
+    speed_output = new SKOutputFloat(speed_path);
+    dir_output = new SKOutputFloat(dir_path);
+
     app.onRepeat(250, []() {calcWindSpeedAndDir();});
     app.onRepeat(1000, []() {printDebug();});
 
@@ -134,7 +136,7 @@ void IRAM_ATTR readWindSpeed()
         // Direction pulse should have occured after the last speed pulse
         if (dirPulse - speedPulse >= 0) directionTime = dirPulse - speedPulse;
 
-        newData = true;
+//        newData = true;
         speedPulse = micros();    // Capture time of the new speed pulse
     }
 }
@@ -145,23 +147,6 @@ void IRAM_ATTR readWindDir()
     {
       dirPulse = micros();        // Capture time of direction pulse
     }
-}
-
-boolean checkDirDev(long cmps, int dev)
-{
-    if (cmps < BAND_0)
-    {
-        if ((abs(dev) < DIR_DEV_LIMIT_0) || (abs(dev) > 360 - DIR_DEV_LIMIT_0)) return true;
-    }
-    else if (cmps < BAND_1)
-    {
-        if ((abs(dev) < DIR_DEV_LIMIT_1) || (abs(dev) > 360 - DIR_DEV_LIMIT_1)) return true;
-    }
-    else
-    {
-        if ((abs(dev) < DIR_DEV_LIMIT_2) || (abs(dev) > 360 - DIR_DEV_LIMIT_2)) return true;
-    }
-    return false;
 }
 
 boolean checkSpeedDev(long cmps, int dev)
@@ -181,12 +166,32 @@ boolean checkSpeedDev(long cmps, int dev)
     return false;
 }
 
+boolean checkDirDev(long cmps, int dev)
+{
+    if (cmps < BAND_0)
+    {
+        if ((abs(dev) < DIR_DEV_LIMIT_0) || (abs(dev) > 360 - DIR_DEV_LIMIT_0)) return true;
+    }
+    else if (cmps < BAND_1)
+    {
+        if ((abs(dev) < DIR_DEV_LIMIT_1) || (abs(dev) > 360 - DIR_DEV_LIMIT_1)) return true;
+    }
+    else
+    {
+        if ((abs(dev) < DIR_DEV_LIMIT_2) || (abs(dev) > 360 - DIR_DEV_LIMIT_2)) return true;
+    }
+    return false;
+}
+
 void calcWindSpeedAndDir()
 {
+
+    Serial.println("spP: " + speedPulse);
+    Serial.println("diP: " + dirPulse);
     unsigned long dirPulse_, speedPulse_;
     unsigned long speedTime_;
     unsigned long directionTime_;
-    long windDirection = 0l, rps = 0l, cmps = 0l;
+    long windDirection = 0l, cmps = 0l;
 
     static int prevSpeed = 0;
     static int prevDir = 0;
@@ -240,7 +245,8 @@ void calcWindSpeedAndDir()
           else
           {
             // Calculate direction from captured pulse times
-            windDirection = (((directionTime_ * 360) / speedTime_) + DIRECTION_OFFSET) % 360;
+            windDirection = (((directionTime_ * 360) / speedTime_) + DIRECTION_OFFSET) % 360; //TODO: make direction offset web-configurable
+            // resulting direction was reversed, rotating the wind vane clockwise gave counterclockwise readings, this corrects it:
             windDirection = 360 - windDirection;
 
             // Find deviation from previous value
@@ -260,8 +266,7 @@ void calcWindSpeedAndDir()
               }
               // Perform filtering to smooth the direction output
               dirOut = (dirOut + (int)(round(filterGain * delta))) % 360;
-              // resulting direction was reversed, rotating the wind vane clockwise gave counterclockwise readings
-              if (dirOut < 0) dirOut = dirOut + 360;
+              if (dirOut < 0) dirOut = dirOut + 360; //
             }
             prevDir = windDirection;
           }
@@ -279,12 +284,10 @@ void calcWindSpeedAndDir()
         prevSpeed = 0;
     }
 
-/*
-    TODO
-    SK output stuff goes here?
-    speedOut/100 is float, meters/second
-    dirOut*0.0174533 is float, radians
-*/
+    speed_output->set_input((speedOut/100));
+    dir_output->set_input((dirOut*0.0174533));
+    Serial.println("spd: " + speedOut);
+    Serial.println("dir: " + dirOut);
 }
 
 void printDebug()
@@ -292,14 +295,14 @@ void printDebug()
   Serial.print(millis());
   Serial.print(",");
   Serial.print(dirOut);
-//  Serial.print(",");
-//  Serial.print(windDirection);
   Serial.print(",");
-  Serial.println(speedOut/100);
-//  Serial.print(",");
-//  Serial.print(cmps/100);
-//  Serial.print(",");
-//  Serial.println(rps);
+  Serial.print((dirOut*0.0174533));
+  Serial.print(",");
+  Serial.print(speedOut);
+  Serial.print(",");
+  Serial.print((speedOut/100.0));
+  Serial.print(",");
+  Serial.println(rps);
 }
 
 void loop()
