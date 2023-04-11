@@ -43,7 +43,7 @@ using namespace sensesp;
 const unsigned long DEBOUNCE = 10000ul;      // Minimum switch time in microseconds
 const unsigned long DIRECTION_OFFSET = 0ul;  // Manual direction offset in degrees, if required
 const unsigned long TIMEOUT = 1500000ul;       // Maximum time allowed between speed pulses in microseconds
-const unsigned long UPDATE_RATE = 500ul;     // How often to send out NMEA data in milliseconds
+const unsigned long UPDATE_RATE = 500ul;     // How often to send out SK data in milliseconds
 const float filterGain = 0.25;               // Filter gain on direction output filter. Range: 0.0 to 1.0
                                              // 1.0 means no filtering. A smaller number increases the filtering
 
@@ -64,8 +64,6 @@ volatile unsigned long speedPulse = 0ul;    // Time capture of speed pulse
 volatile unsigned long dirPulse = 0ul;      // Time capture of direction pulse
 volatile unsigned long speedTime = 0ul;     // Time between speed pulses (microseconds)
 volatile unsigned long directionTime = 0ul; // Time between direction pulses (microseconds)
-volatile boolean newData = false;           // New speed pulse received
-volatile unsigned long lastUpdate = 0ul;    // Time of last serial output
 
 volatile int speedOut = 0;    // Wind speed output in cm/s (divide by 100 for m/s)
 volatile int dirOut = 0;      // Direction output in degrees
@@ -75,7 +73,7 @@ volatile long rps = 0l;
 SKOutputFloat* speed_output;
 SKOutputFloat* dir_output;
 
-boolean debug = false;
+boolean debug = true;
 
 // initial function declarations
 void IRAM_ATTR readWindSpeed();
@@ -89,13 +87,9 @@ ReactESP app;
 
 void setup()
 {
-/*
-    Serial.begin(115200, SERIAL_8N1);
-    Serial.printf("(non)SensESP-PeetBrosWind version v%s, built %s\n",VERSION,BUILD_TIMESTAMP);
-    Serial.print("Direction Filter: ");
-    Serial.println(filterGain);
-*/
     SetupSerialDebug(115200);
+
+    Serial.printf("SensESP-PeetBrosWind version v%s, built %s\n",VERSION,BUILD_TIMESTAMP);
 
     SensESPAppBuilder builder;
     sensesp_app = (&builder)
@@ -114,16 +108,15 @@ void setup()
     speed_output = new SKOutputFloat(speed_path);
     dir_output = new SKOutputFloat(dir_path);
 
-    app.onRepeat(250, []() {calcWindSpeedAndDir();});
-    app.onRepeat(1000, []() {printDebug();});
+    app.onRepeat(200, []() {calcWindSpeedAndDir();});
+    if (debug) app.onRepeat(200, []() {printDebug();});
 
     pinMode(windSpeedPin, INPUT_PULLUP);
-    attachInterrupt(windSpeedPin, readWindSpeed, FALLING);
+    app.onInterrupt(windSpeedPin, FALLING, []() {readWindSpeed();});
 
     pinMode(windDirPin, INPUT_PULLUP);
-    attachInterrupt(windDirPin, readWindDir, FALLING);
+    app.onInterrupt(windDirPin, FALLING, []() {readWindDir();});
 
-    interrupts();
 }
 
 void IRAM_ATTR readWindSpeed()
@@ -136,7 +129,6 @@ void IRAM_ATTR readWindSpeed()
         // Direction pulse should have occured after the last speed pulse
         if (dirPulse - speedPulse >= 0) directionTime = dirPulse - speedPulse;
 
-//        newData = true;
         speedPulse = micros();    // Capture time of the new speed pulse
     }
 }
@@ -185,9 +177,6 @@ boolean checkDirDev(long cmps, int dev)
 
 void calcWindSpeedAndDir()
 {
-
-    Serial.println("spP: " + speedPulse);
-    Serial.println("diP: " + dirPulse);
     unsigned long dirPulse_, speedPulse_;
     unsigned long speedTime_;
     unsigned long directionTime_;
@@ -266,7 +255,7 @@ void calcWindSpeedAndDir()
               }
               // Perform filtering to smooth the direction output
               dirOut = (dirOut + (int)(round(filterGain * delta))) % 360;
-              if (dirOut < 0) dirOut = dirOut + 360; //
+              if (dirOut < 0) dirOut = dirOut + 360;
             }
             prevDir = windDirection;
           }
@@ -286,23 +275,16 @@ void calcWindSpeedAndDir()
 
     speed_output->set_input((speedOut/100));
     dir_output->set_input((dirOut*0.0174533));
-    Serial.println("spd: " + speedOut);
-    Serial.println("dir: " + dirOut);
 }
 
 void printDebug()
 {
-  Serial.print(millis());
-  Serial.print(",");
-  Serial.print(dirOut);
-  Serial.print(",");
-  Serial.print((dirOut*0.0174533));
-  Serial.print(",");
-  Serial.print(speedOut);
-  Serial.print(",");
-  Serial.print((speedOut/100.0));
-  Serial.print(",");
-  Serial.println(rps);
+  Serial.printf("millis: %lu,", millis());
+  Serial.printf("dir_raw: %i,", dirOut);
+  Serial.printf("dir_adj: %f,", (dirOut*0.0174533));
+  Serial.printf("spd_raw: %i,", speedOut);
+  Serial.printf("spd_adj: %f,", (speedOut/100.0));
+  Serial.printf("rps: %d\n", rps);
 }
 
 void loop()
