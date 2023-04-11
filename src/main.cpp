@@ -105,8 +105,8 @@ void setup()
     const char* speed_path = "environment.wind.speedApparent";
     const char* dir_path = "environment.wind.angleApparent";
 
-    speed_output = new SKOutputFloat(speed_path);
-    dir_output = new SKOutputFloat(dir_path);
+    speed_output = new SKOutputFloat(speed_path, "path/speed", "m/s");
+    dir_output = new SKOutputFloat(dir_path, "path/direction", "rad");
 
     app.onRepeat(200, []() {calcWindSpeedAndDir();});
     if (debug) app.onRepeat(200, []() {printDebug();});
@@ -279,7 +279,7 @@ void calcWindSpeedAndDir()
 
 void printDebug()
 {
-  Serial.printf("millis: %lu,", millis());
+//  Serial.printf("millis: %lu,", millis());
   Serial.printf("dir_raw: %i,", dirOut);
   Serial.printf("dir_adj: %f,", (dirOut*0.0174533));
   Serial.printf("spd_raw: %i,", speedOut);
