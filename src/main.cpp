@@ -26,7 +26,16 @@
 
 #include "Version.h"
 #include "Arduino.h"
-#include "PString.h" // only used in printWindNmea() and can be ditched once the SensESP part works.
+#include "sensesp.h"
+#include "sensesp_app.h"
+#include "sensesp_app_builder.h"
+#include "sensesp/sensors/digital_input.h"
+#include "sensesp/signalk/signalk_output.h"
+#include "sensesp/system/lambda_consumer.h"
+#include "sensesp/transforms/debounce.h"
+#include "sensesp/transforms/integrator.h"
+
+using namespace sensesp;
 
 #define windSpeedPin 12
 #define windDirPin 14
@@ -38,18 +47,18 @@ const unsigned long UPDATE_RATE = 500ul;     // How often to send out NMEA data 
 const float filterGain = 0.25;               // Filter gain on direction output filter. Range: 0.0 to 1.0
                                              // 1.0 means no filtering. A smaller number increases the filtering
 
-// Knots is actually stored as (Knots * 100). Deviations below should match these units.
-const int BAND_0 =  10 * 100;
-const int BAND_1 =  80 * 100;
+// Speed is actually stored as cm/s (or "m/s * 100"). Deviations below should match these units.
+const int BAND_0 =  5 * 100;
+const int BAND_1 =  40 * 100;
 
-const int SPEED_DEV_LIMIT_0 =  5 * 100;     // Deviation from last measurement to be valid. Band_0: 0 to 10 knots
-const int SPEED_DEV_LIMIT_1 = 10 * 100;     // Deviation from last measurement to be valid. Band_1: 10 to 80 knots
-const int SPEED_DEV_LIMIT_2 = 30 * 100;     // Deviation from last measurement to be valid. Band_2: 80+ knots
+const int SPEED_DEV_LIMIT_0 =  5 * 100;     // Deviation from last measurement to be valid. Band_0: 0 to 5 m/s
+const int SPEED_DEV_LIMIT_1 = 10 * 100;     // Deviation from last measurement to be valid. Band_1: 5 to 40 m/s
+const int SPEED_DEV_LIMIT_2 = 30 * 100;     // Deviation from last measurement to be valid. Band_2: 40+ m/s
 
 // Should be larger limits as lower speed, as the direction can change more per speed update
-const int DIR_DEV_LIMIT_0 = 25;     // Deviation from last measurement to be valid. Band_0: 0 to 10 knots
-const int DIR_DEV_LIMIT_1 = 18;     // Deviation from last measurement to be valid. Band_1: 10 to 80 knots
-const int DIR_DEV_LIMIT_2 = 10;     // Deviation from last measurement to be valid. Band_2: 80+ knots
+const int DIR_DEV_LIMIT_0 = 25;     // Deviation from last measurement to be valid. Band_0: 0 to 5 m/s
+const int DIR_DEV_LIMIT_1 = 18;     // Deviation from last measurement to be valid. Band_1: 5 to 40 m/s
+const int DIR_DEV_LIMIT_2 = 10;     // Deviation from last measurement to be valid. Band_2: 40+ m/s
 
 volatile unsigned long speedPulse = 0ul;    // Time capture of speed pulse
 volatile unsigned long dirPulse = 0ul;      // Time capture of direction pulse
@@ -58,28 +67,53 @@ volatile unsigned long directionTime = 0ul; // Time between direction pulses (mi
 volatile boolean newData = false;           // New speed pulse received
 volatile unsigned long lastUpdate = 0ul;    // Time of last serial output
 
-volatile int knotsOut = 0;    // Wind speed output in knots * 100
+volatile int speedOut = 0;    // Wind speed output in cm/s (divide by 100 for m/s)
 volatile int dirOut = 0;      // Direction output in degrees
 volatile boolean ignoreNextReading = false;
 
-boolean debug = true;
+boolean debug = false;
 
 // initial function declarations
 void IRAM_ATTR readWindSpeed();
 void IRAM_ATTR readWindDir();
-boolean checkDirDev(long knots, int dev);
-boolean checkSpeedDev(long knots, int dev);
+boolean checkDirDev(long cmps, int dev);
+boolean checkSpeedDev(long cmps, int dev);
 void calcWindSpeedAndDir();
-byte getChecksum(char* str);  // only needed for NMEA, can be ditched later
-void printWindNmea();         // only needed for NMEA, can be ditched later
+void printDebug();
 
+ReactESP app;
 
 void setup()
 {
+/*
     Serial.begin(115200, SERIAL_8N1);
     Serial.printf("(non)SensESP-PeetBrosWind version v%s, built %s\n",VERSION,BUILD_TIMESTAMP);
     Serial.print("Direction Filter: ");
     Serial.println(filterGain);
+*/
+    SetupSerialDebug(115200);
+
+    SensESPAppBuilder builder;
+    sensesp_app = (&builder)
+                  ->set_hostname("SensESP-PeetBrosWind")
+                  // Optionally, hard-code the WiFi and Signal K server
+                  // settings. This is normally not needed.
+                  //->set_wifi("My WiFi SSID", "my_wifi_password")
+                  //->set_sk_server("192.168.10.3", 80)
+                  ->enable_ota("mypassword")
+                  ->enable_system_info_sensors()
+                  ->get_app();
+
+    const char* dir_path = "environment.wind.angleApparent";
+    const char* speed_path = "environment.wind.speedApparent";
+
+/* 
+  TODO
+    auto* dir_output = new SKOutputFloat(dir_path);
+    auto* speed_output = new SKOutputFloat(speed_path);
+*/
+    app.onRepeat(250, []() {calcWindSpeedAndDir();});
+    app.onRepeat(1000, []() {printDebug();});
 
     pinMode(windSpeedPin, INPUT_PULLUP);
     attachInterrupt(windSpeedPin, readWindSpeed, FALLING);
@@ -113,13 +147,13 @@ void IRAM_ATTR readWindDir()
     }
 }
 
-boolean checkDirDev(long knots, int dev)
+boolean checkDirDev(long cmps, int dev)
 {
-    if (knots < BAND_0)
+    if (cmps < BAND_0)
     {
         if ((abs(dev) < DIR_DEV_LIMIT_0) || (abs(dev) > 360 - DIR_DEV_LIMIT_0)) return true;
     }
-    else if (knots < BAND_1)
+    else if (cmps < BAND_1)
     {
         if ((abs(dev) < DIR_DEV_LIMIT_1) || (abs(dev) > 360 - DIR_DEV_LIMIT_1)) return true;
     }
@@ -130,13 +164,13 @@ boolean checkDirDev(long knots, int dev)
     return false;
 }
 
-boolean checkSpeedDev(long knots, int dev)
+boolean checkSpeedDev(long cmps, int dev)
 {
-    if (knots < BAND_0)
+    if (cmps < BAND_0)
     {
         if (abs(dev) < SPEED_DEV_LIMIT_0) return true;
     }
-    else if (knots < BAND_1)
+    else if (cmps < BAND_1)
     {
         if (abs(dev) < SPEED_DEV_LIMIT_1) return true;
     }
@@ -152,9 +186,9 @@ void calcWindSpeedAndDir()
     unsigned long dirPulse_, speedPulse_;
     unsigned long speedTime_;
     unsigned long directionTime_;
-    long windDirection = 0l, rps = 0l, knots = 0l;
+    long windDirection = 0l, rps = 0l, cmps = 0l;
 
-    static int prevKnots = 0;
+    static int prevSpeed = 0;
     static int prevDir = 0;
     int dev = 0;
 
@@ -169,7 +203,8 @@ void calcWindSpeedAndDir()
     // Make speed zero, if the pulse delay is too long
     if (micros() - speedPulse_ > TIMEOUT) speedTime_ = 0ul;
 
-    // The following converts revolutions per 100 seconds (rps) to knots x 100
+    // The following converts revolutions per 100 seconds (rps) to cm/s 
+    // (cm/s simply for precision and speed, divide by 100 later to get m/s)
     // This calculation follows the Peet Bros. piecemeal calibration data
     if (speedTime_ > 0)
     {
@@ -177,31 +212,30 @@ void calcWindSpeedAndDir()
 
         if (rps < 323)
         {
-          knots = (rps * rps * -11)/11507 + (293 * rps)/115 - 12;
+          cmps = (rps * rps * -11)/22369 + (293 * rps)/223 - 12;
         }
         else if (rps < 5436)
         {
-          knots = (rps * rps / 2)/11507 + (220 * rps)/115 + 96;
+          cmps = (rps * rps / 2)/22369 + (220 * rps)/223 + 96;
         }
         else
         {
-          knots = (rps * rps * 11)/11507 - (957 * rps)/115 + 28664;
+          cmps = (rps * rps * 11)/22369 - (957 * rps)/223 + 28664;
         }
-        //knots = mph * 0.86897
 
-        if (knots < 0l) knots = 0l;  // Remove the possibility of negative speed
+        if (cmps < 0l) cmps = 0l;  // Remove the possibility of negative speed
         // Find deviation from previous value
-        dev = (int)knots - prevKnots;
+        dev = (int)cmps - prevSpeed;
 
         // Only update output if in deviation limit
-        if (checkSpeedDev(knots, dev))
+        if (checkSpeedDev(cmps, dev))
         {
-          knotsOut = knots;
+          speedOut = cmps;
 
           // If speed data is ok, then continue with direction data
           if (directionTime_ > speedTime_)
           {
-              windDirection = 999;    // For debugging only (not output to knots)
+              windDirection = 999;    // For debugging only (not output to speed)
           }
           else
           {
@@ -213,7 +247,7 @@ void calcWindSpeedAndDir()
             dev = (int)windDirection - prevDir;
 
             // Check deviation is in range
-            if (checkDirDev(knots, dev))
+            if (checkDirDev(cmps, dev))
             {
               int delta = ((int)windDirection - dirOut);
               if (delta < -180)
@@ -237,102 +271,38 @@ void calcWindSpeedAndDir()
           ignoreNextReading = true;
         }
 
-        prevKnots = knots;    // Update, even if outside deviation limit, cause it might be valid!?
+        prevSpeed = cmps;    // Update, even if outside deviation limit, cause it might be valid!?
     }
     else
     {
-        knotsOut = 0;
-        prevKnots = 0;
+        speedOut = 0;
+        prevSpeed = 0;
     }
 
-    if (debug)
-    {
-        Serial.print(millis());
-        Serial.print(",");
-        Serial.print(dirOut);
-        Serial.print(",");
-        Serial.print(windDirection);
-        Serial.print(",");
-        Serial.println(knotsOut/100);
-        //Serial.print(",");
-        //Serial.print(knots/100);
-        //Serial.print(",");
-        //Serial.println(rps);
-    }
-    else
-    {
-      if (millis() - lastUpdate > UPDATE_RATE)
-      {
-        printWindNmea();
-        lastUpdate = millis();
-      }
-    }
+/*
+    TODO
+    SK output stuff goes here?
+    speedOut/100 is float, meters/second
+    dirOut*0.0174533 is float, radians
+*/
 }
 
-byte getChecksum(char* str)
+void printDebug()
 {
-    byte cs = 0;
-    for (unsigned int n = 1; n < strlen(str) - 1; n++)
-    {
-        cs ^= str[n];
-    }
-    return cs;
-}
-
-/*=== MWV - Wind Speed and Angle ===
- *
- * ------------------------------------------------------------------------------
- *         1   2 3   4 5
- *         |   | |   | |
- *  $--MWV,x.x,a,x.x,a*hh<CR><LF>
- * ------------------------------------------------------------------------------
- *
- * Field Number:
- *
- * 1. Wind Angle, 0 to 360 degrees
- * 2. Reference, R = Relative, T = True
- * 3. Wind Speed
- * 4. Wind Speed Units, K/M/N
- * 5. Status, A = Data Valid
- * 6. Checksum
- *
- */
-void printWindNmea()
-{
-    char windSentence [30];
-    float spd = knotsOut / 100.0;
-    byte cs;
-    //Assemble a sentence of the various parts so that we can calculate the proper checksum
-
-    PString str(windSentence, sizeof(windSentence));
-    str.print("$WIMWV,");
-    str.print(dirOut);
-    str.print(".0,R,");
-    str.print(spd);
-    str.print(",N,A*");
-    //calculate the checksum
-
-    cs = getChecksum(windSentence);
-    //bug - arduino prints 0x007 as 7, 0x02B as 2B, so we add it now
-    if (cs < 0x10) str.print('0');
-    str.print(cs, HEX); // Assemble the final message and send it out the serial port
-    Serial.println(windSentence);
+  Serial.print(millis());
+  Serial.print(",");
+  Serial.print(dirOut);
+//  Serial.print(",");
+//  Serial.print(windDirection);
+  Serial.print(",");
+  Serial.println(speedOut/100);
+//  Serial.print(",");
+//  Serial.print(cmps/100);
+//  Serial.print(",");
+//  Serial.println(rps);
 }
 
 void loop()
 {
-  int i;
-  const unsigned int LOOP_DELAY = 50;
-  const unsigned int LOOP_TIME = TIMEOUT / LOOP_DELAY;
-
-  i = 0;
-  // If there is new data, process it, otherwise wait for LOOP_TIME to pass
-  while ((newData != true) && (i < LOOP_TIME))
-  {
-    i++;
-    delayMicroseconds(LOOP_DELAY);
-  }
-
-  calcWindSpeedAndDir();    // Process new data
-  newData = false;
+ app.tick();
 }
