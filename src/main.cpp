@@ -27,7 +27,6 @@
 #include "Version.h"
 #include "Arduino.h"
 #include "sensesp.h"
-#include "sensesp_app.h"
 #include "sensesp_app_builder.h"
 
 using namespace sensesp;
@@ -65,10 +64,12 @@ volatile int dirOut = 0;      // Direction output in degrees
 volatile boolean ignoreNextReading = false;
 volatile long rps = 0l;
 
+SKMetadata* speed_meta;
+SKMetadata* dir_meta;
 SKOutputFloat* speed_output;
 SKOutputFloat* dir_output;
 
-boolean debug = true;
+boolean debug = false;
 
 // initial function declarations
 void IRAM_ATTR readWindSpeed();
@@ -82,7 +83,9 @@ ReactESP app;
 
 void setup()
 {
-    SetupSerialDebug(115200);
+    #ifndef SERIAL_DEBUG_DISABLED
+      SetupSerialDebug(115200);
+    #endif
 
     Serial.printf("SensESP-PeetBrosWind version v%s, built %s\n",VERSION,BUILD_TIMESTAMP);
 
@@ -100,11 +103,11 @@ void setup()
     const char* speed_path = "environment.wind.speedApparent";
     const char* dir_path = "environment.wind.angleApparent";
 
-    speed_output = new SKOutputFloat(speed_path, "/path/speed", "m/s");
-    dir_output = new SKOutputFloat(dir_path, "/path/direction", "rad");
+    speed_meta = new SKMetadata("m/s", "Apparent Wind Speed", "", "AWS", 1.0);
+    dir_meta = new SKMetadata("rad", "Apparent Wind Angle", "", "AWA", 1.0);
 
-    app.onRepeat(200, []() {calcWindSpeedAndDir();});
-    if (debug) app.onRepeat(200, []() {printDebug();});
+    speed_output = new SKOutputFloat(speed_path, speed_meta);
+    dir_output = new SKOutputFloat(dir_path, dir_meta);
 
     pinMode(windSpeedPin, INPUT_PULLUP);
     app.onInterrupt(windSpeedPin, FALLING, []() {readWindSpeed();});
@@ -112,6 +115,10 @@ void setup()
     pinMode(windDirPin, INPUT_PULLUP);
     app.onInterrupt(windDirPin, FALLING, []() {readWindDir();});
 
+    app.onRepeat(200, []() {calcWindSpeedAndDir();});
+    if (debug) app.onRepeat(200, []() {printDebug();});
+
+    sensesp_app->start();
 }
 
 void IRAM_ATTR readWindSpeed()
@@ -274,7 +281,7 @@ void calcWindSpeedAndDir()
 
 void printDebug()
 {
-//  Serial.printf("millis: %lu,", millis());
+//  Serial.printf("millis: %lu,", millis()); // -- breaks Arduino Serial Plotter output
   Serial.printf("dir_raw: %i,", dirOut);
   Serial.printf("dir_adj: %f,", (dirOut*0.0174533));
   Serial.printf("spd_raw: %i,", speedOut);
