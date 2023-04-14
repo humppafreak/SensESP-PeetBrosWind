@@ -28,6 +28,7 @@
 #include "Arduino.h"
 #include "sensesp.h"
 #include "sensesp_app_builder.h"
+#include "ui_configurables.h"
 
 using namespace sensesp;
 
@@ -35,11 +36,7 @@ using namespace sensesp;
 #define windDirPin 14
 
 const unsigned long DEBOUNCE = 10000ul;      // Minimum switch time in microseconds
-const unsigned long DIRECTION_OFFSET = 0ul;  // Manual direction offset in degrees, if required
 const unsigned long TIMEOUT = 1500000ul;       // Maximum time allowed between speed pulses in microseconds
-const unsigned long UPDATE_RATE = 500ul;     // How often to send out SK data in milliseconds
-const float filterGain = 0.25;               // Filter gain on direction output filter. Range: 0.0 to 1.0
-                                             // 1.0 means no filtering. A smaller number increases the filtering
 
 // Speed is actually stored as cm/s (or "m/s * 100"). Deviations below should match these units.
 const int BAND_0 =  5 * 100;
@@ -68,6 +65,8 @@ SKMetadata* speed_meta;
 SKMetadata* dir_meta;
 SKOutputFloat* speed_output;
 SKOutputFloat* dir_output;
+FloatConfig *filter_gain;
+IntConfig *dir_offset;
 
 boolean debug = false;
 
@@ -108,6 +107,9 @@ void setup()
 
     speed_output = new SKOutputFloat(speed_path, speed_meta);
     dir_output = new SKOutputFloat(dir_path, dir_meta);
+
+    filter_gain = new FloatConfig(0.25, "/Settings/Filter Gain", "Filter gain on direction output filter. Range: 0.0 to 1.0, where 1.0 means no filtering. A smaller number increases the filtering.", 600);
+    dir_offset = new IntConfig(0, "/Settings/Direction Offset", "Offset (in degrees) between device-north and direction in which boat is pointing", 500);
 
     pinMode(windSpeedPin, INPUT_PULLUP);
     app.onInterrupt(windSpeedPin, FALLING, []() {readWindSpeed();});
@@ -236,7 +238,7 @@ void calcWindSpeedAndDir()
           else
           {
             // Calculate direction from captured pulse times
-            windDirection = (((directionTime_ * 360) / speedTime_) + DIRECTION_OFFSET) % 360; //TODO: make direction offset web-configurable
+            windDirection = (((directionTime_ * 360) / speedTime_) - dir_offset->get_value()) % 360;
             // resulting direction was reversed, rotating the wind vane clockwise gave counterclockwise readings, this corrects it:
             windDirection = 360 - windDirection;
 
@@ -256,7 +258,7 @@ void calcWindSpeedAndDir()
                 delta = delta - 360;
               }
               // Perform filtering to smooth the direction output
-              dirOut = (dirOut + (int)(round(filterGain * delta))) % 360;
+              dirOut = (dirOut + (int)(round(filter_gain->get_value() * delta))) % 360;
               if (dirOut < 0) dirOut = dirOut + 360;
             }
             prevDir = windDirection;
@@ -282,6 +284,8 @@ void calcWindSpeedAndDir()
 void printDebug()
 {
 //  Serial.printf("millis: %lu,", millis()); // -- breaks Arduino Serial Plotter output
+  Serial.printf("f_g: %f,", filter_gain->get_value());
+  Serial.printf("d_o: %i,", dir_offset->get_value());
   Serial.printf("dir_raw: %i,", dirOut);
   Serial.printf("dir_adj: %f,", (dirOut*0.0174533));
   Serial.printf("spd_raw: %i,", speedOut);
