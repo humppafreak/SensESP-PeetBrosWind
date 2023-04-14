@@ -68,6 +68,7 @@ SKOutputFloat* dir_output;
 FloatConfig *filter_gain;
 IntConfig *dir_offset;
 CheckboxConfig *debug;
+IntConfig *update_rate;
 
 // initial function declarations
 void IRAM_ATTR readWindSpeed();
@@ -99,6 +100,7 @@ void setup()
                   ->get_app();
 
     debug = new CheckboxConfig(false, "debug", "/Settings/Debug Output on Serial", "Enable debug output to USB Serial (115200 8N1)", 700);
+    update_rate = new IntConfig(250, "/Settings/Update Rate", "Send data to SignalK server every n milliseconds", 400);
 
     const char* speed_path = "environment.wind.speedApparent";
     const char* dir_path = "environment.wind.angleApparent";
@@ -118,7 +120,7 @@ void setup()
     pinMode(windDirPin, INPUT_PULLUP);
     app.onInterrupt(windDirPin, FALLING, []() {readWindDir();});
 
-    app.onRepeat(200, []() {calcWindSpeedAndDir();});
+    app.onRepeat(update_rate->get_value(), []() {calcWindSpeedAndDir();});
     app.onRepeat(200, []() {if (debug->get_value()) {printDebug();}});
 
     sensesp_app->start();
