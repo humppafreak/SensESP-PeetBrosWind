@@ -67,8 +67,7 @@ SKOutputFloat* speed_output;
 SKOutputFloat* dir_output;
 FloatConfig *filter_gain;
 IntConfig *dir_offset;
-
-boolean debug = false;
+CheckboxConfig *debug;
 
 // initial function declarations
 void IRAM_ATTR readWindSpeed();
@@ -99,6 +98,8 @@ void setup()
                   ->enable_system_info_sensors()
                   ->get_app();
 
+    debug = new CheckboxConfig(false, "debug", "/Settings/Debug Output on Serial", "Enable debug output to USB Serial (115200 8N1)", 700);
+
     const char* speed_path = "environment.wind.speedApparent";
     const char* dir_path = "environment.wind.angleApparent";
 
@@ -118,7 +119,7 @@ void setup()
     app.onInterrupt(windDirPin, FALLING, []() {readWindDir();});
 
     app.onRepeat(200, []() {calcWindSpeedAndDir();});
-    if (debug) app.onRepeat(200, []() {printDebug();});
+    app.onRepeat(200, []() {if (debug->get_value()) {printDebug();}});
 
     sensesp_app->start();
 }
