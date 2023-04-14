@@ -29,11 +29,6 @@
 #include "sensesp.h"
 #include "sensesp_app.h"
 #include "sensesp_app_builder.h"
-#include "sensesp/sensors/digital_input.h"
-#include "sensesp/signalk/signalk_output.h"
-#include "sensesp/system/lambda_consumer.h"
-#include "sensesp/transforms/debounce.h"
-#include "sensesp/transforms/integrator.h"
 
 using namespace sensesp;
 
@@ -105,8 +100,8 @@ void setup()
     const char* speed_path = "environment.wind.speedApparent";
     const char* dir_path = "environment.wind.angleApparent";
 
-    speed_output = new SKOutputFloat(speed_path, "path/speed", "m/s");
-    dir_output = new SKOutputFloat(dir_path, "path/direction", "rad");
+    speed_output = new SKOutputFloat(speed_path, "/path/speed", "m/s");
+    dir_output = new SKOutputFloat(dir_path, "/path/direction", "rad");
 
     app.onRepeat(200, []() {calcWindSpeedAndDir();});
     if (debug) app.onRepeat(200, []() {printDebug();});
