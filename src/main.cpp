@@ -280,7 +280,7 @@ void calcWindSpeedAndDir()
         prevSpeed = 0;
     }
 
-    speed_output->set_input((speedOut/100));
+    speed_output->set_input((speedOut/100.0));
     dir_output->set_input((dirOut*0.0174533));
 }
 
